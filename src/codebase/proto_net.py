@@ -39,7 +39,7 @@ class PrototypicalNetwork(Model):
         self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points, image_dim))
         self.query_labels_placeholder = tf.placeholder(tf.int32, shape=(query_points))
 
-    
+
 if __name__ == "__main__":
     config = parser.parse_args()
     model = PrototypicalNetwork(config)

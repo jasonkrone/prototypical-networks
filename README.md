@@ -7,7 +7,8 @@
 1. Get code linter and edit code [Jason; 12pm Sept 25th]
 2. Create generic template from code and add to research template [Jason; Sept 28]
 3. Add code to limit GPU usage to ^ template
-4. 
+4. Determine how to fix meta data embedding to unit length  
+5. 
 
 ##############################################################################
 #                                                                            #

@@ -75,6 +75,7 @@ class PrototypicalNetwork(Model):
         }
         return feed_dict
 
+    # TODO: give kernel sizes for embedding
     def add_embedding(self, images):
         with tf.variable_scope('conv1') as scope:
             conv1 = conv_bn_relu_pool(images, )
@@ -100,27 +101,85 @@ class PrototypicalNetwork(Model):
             support_embedding = self.add_embedding(support_points)
             scope.reuse_variables()
             query_embedding = self.add_embedding(query_points)
-        # create prototypes for each class
-        class_prototypes = 
-        with tf.variable_scope('prototype') as scope:
-            for i in range(self.num_classes_per_ep):
-                class_embeddings = tf.slice(support_embedding, )
-                prototype = tf.reduce_mean(support_embedding, axis=0)
-        with tf.variable_scope('distance') as scope:
-            # for each query point compute distance to each prototype
-            # this will be 3d: N_q x N_k x N_f
-            # ^ first duplicate each q point N_k times: N_q x N_f => N_qx N_k x N_f
-            # use broadcasting to subtract N_k i.e. class prototypes => N_q x N_k x N_f
-            # then take the norm over the 3rd dimension => N_q x N_k
-            # ^ turn that to * -1 before softmax
-            # then take the softmax over the 2nd dimension
-            # n.m you can just use product of matrices as eulidean dist. TODO: probably want to test it
-        return support_embedding, query_embedding
 
-    def add_loss_op(self, support_embedding, query_embedding):
-        self.
-        loss = 
-        return loss
+        # create prototypes for each class
+        ones = tf.ones_like(support_embedding)
+        per_class_embedding_sum = tf.unsorted_segment_sum(support_embedding, support_labels, self.num_classes_per_ep, name='embedding_sum')
+        class_counts = tf.unsorted_segment_sum(ones, support_labels, self.num_classes_per_ep)
+        class_prototypes = per_class_embedding_sum / class_counts
+
+        #dist = np.sqrt(np.sum(X**2, axis=1).reshape(-1, 1) - 2*X.dot(self.X_train.T) + np.sum(self.X_train**2, axis=1))
+        # dists[i, j] is the Euclidean distance between the ith test point and the jth trainin
+        # dists[i, j] distance between ith query_point and jth prototype
+        query_square_sum = tf.reshape(tf.reduce_sum(tf.square(query_embedding), 1), shape=[-1, 1])
+        proto_square_sum = tf.reduce_sum(tf.square(class_prototypes), 1)
+        distances = tf.add(query_square_sum, proto_square_sum) - 2*tf.matmul(query_embedding, class_prototypes, transpose_b=True)
+        return distances
+
+    def add_training_op(self, loss):
+        # TODO: check this is the right optimizer, finish this
+        optimizer = tf.train.GradientDescentOptimizer(self.lr)
+
+
+    def add_loss_op(self, distances, query_labels):
+        # this won't work right now because of the labels values i.e. we don't produce logits
+        # for each label they're only for the num_classes_per_ep
+        # TODO: make sure the sign on the distances is correct
+        entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=query_labels, logits=distances*-1.0)
+        loss = tf.reduce_mean(entropy, name='loss')
+        # not sure exactly what this does
+        with tf.name_scope('summaries'):
+            tf.summary.scalar('loss', loss)
+            tf.summary.histogram('histogram loss', loss)
+            summary_op = tf.summary.merge_all()
+        return loss, summary_op
+
+    def run_epoch(self, sess, support_points, query_points, support_labels, query_labels):
+        """Runs an epoch of training.
+
+        Trains the model for one-epoch.
+
+        Args:
+          sess: tf.Session() object
+          input_data: np.ndarray of shape (n_samples, n_features)
+          input_labels: np.ndarray of shape (n_samples, n_classes)
+        Returns:
+          average_loss: scalar. Average minibatch loss of model on epoch.
+        """
+        average_loss = 0.0
+        iterator = data_iterator(support_points, support_labels, query_points, query_labels)
+        for i, (sprt_batch, sprt_label_batch, qry_batch, qry_label_batch) in enumerate(iterator):
+            feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch)
+            _, loss = sess.run([self.train_op, self.loss], feed_dict=feed_dict)
+            average_loss += loss
+        average_loss = average_loss / len(iterator)
+        return average_loss
+
+      def fit(self, sess, input_data, input_labels):
+        """Fit model on provided data.
+
+        Args:
+          sess: tf.Session()
+          input_data: np.ndarray of shape (n_samples, n_features)
+          input_labels: np.ndarray of shape (n_samples, n_classes)
+        Returns:
+          losses: list of loss per epoch
+        """
+        raise NotImplementedError("Each Model must re-implement this method.")
+
+      def predict(self, sess, input_data, input_labels=None):
+        """Make predictions from the provided model.
+        Args:
+          sess: tf.Session()
+          input_data: np.ndarray of shape (n_samples, n_features)
+          input_labels: np.ndarray of shape (n_samples, n_classes)
+        Returns:
+          average_loss: Average loss of model.
+          predictions: Predictions of model on input_data
+        """
+
+
+
 
 
 if __name__ == "__main__":

@@ -16,6 +16,8 @@ parser.add_argument('--output_dir', type=str, default=os.path.join(CURRENT_DIR, 
 parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '../log'))
 
 parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate step-size')
+# TODO: cut learning rate in half every 2000 episodes
+parser.add_argument('--num_max_epochs', type=int, default=2000*6)
 parser.add_argument('--image_dim', type=int, default=28*28)
 parser.add_argument('--num_classes_per_ep', type=int, default=1, help='Number of classes per episode')
 parser.add_argument('--num_support_points_per_class', type=int, default=1, help='Number of support points per class')
@@ -41,7 +43,7 @@ class PrototypicalNetwork(Model):
         self.load_data()
         self.add_placeholders()
         self.add_vars()
-        self.pred = self.add_model(self.support_points_placeholder, self.query_points_placeholder)
+        self.pred = self.add_model(self.support_points_placeholder, self.query_points_placeholder, self.is_training_placeholder)
         print('built graph')
         self.loss = self.add_loss_op(self.pred)
         self.train_op = self.add_training_op
@@ -65,42 +67,49 @@ class PrototypicalNetwork(Model):
         self.support_labels_placeholder = tf.placeholder(tf.int32, shape=(support_points_per_ep), name='support_labels')
         self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points_per_ep, self.image_dim), name='query_points')
         self.query_labels_placeholder = tf.placeholder(tf.int32, shape=(query_points_per_ep), name='query_labels')
+        self.is_training_placeholder = tf.placeholder(tf.bool, name='is_training')
 
-    def create_feed_dict(self, support_points, support_labels, query_points, query_labels):
+    def create_feed_dict(self, support_points, support_labels, query_points, query_labels, is_training):
         feed_dict = {
             self.support_points_placeholder : support_points,
             self.support_labels_placeholder : support_labels,
             self.query_points_placeholder   : query_points,
-            self.query_labels_placeholder   : query_labels
+            self.query_labels_placeholder   : query_labels,
+            self.is_training_placeholder    : is_training
         }
         return feed_dict
 
-    # TODO: give kernel sizes for embedding
-    def add_embedding(self, images):
+    def add_embedding(self, images, is_training):
+        # in dim: Nx28x28x1 => outdim: Nx14x14x64
         with tf.variable_scope('conv1') as scope:
-            conv1 = conv_bn_relu_pool(images, )
+            conv1 = self.conv_bn_relu_pool(images, is_training,[3, 3, 1, 64], [64])
+        # in dim: Nx14x14x64 => outdim: Nx7x7x64
         with tf.variable_scope('conv2') as scope:
-            conv2 = conv_bn_relu_pool(conv1, )
+            conv2 = self.conv_bn_relu_pool(conv1, is_training, [3, 3, 64, 64], [64])
+        # in dim: Nx7x7x64 => outdim: Nx3x3x64
         with tf.variable_scope('conv3') as scope:
-            conv3 = conv_bn_relu_pool(conv2, )
+            conv3 = self.conv_bn_relu_pool(conv2, is_training, [3, 3, 64, 64], [64])
+        # in dim: Nx3x3x64 => outdim: Nx1x1x64
         with tf.variable_scope('conv4') as scope:
-            conv4 = conv_bn_relu_pool(conv3, )
+            conv4 = self.conv_bn_relu_pool(conv3, is_training,  [3, 3, 64, 64], [64])
         return conv4
 
-    def conv_bn_relu_pool(input, kernel_shape, bias_shape):
+    def conv_bn_relu_pool(self, input, is_training, kernel_shape, bias_shape):
         weights = tf.get_variable("weights", kernel_shape, initializer=tf.random_normal_initializer())
         biases = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
         conv = tf.nn.conv2d(input, weights, strides=[1, 1, 1, 1], padding='SAME')
-        relu = tf.relu(conv + biases)
-        pool = tf.nn.max_pool(relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+        # TODO: double check that batchnorm is being reused for a given layer
+        batch_norm = tf.layers.batch_normalization(conv + biases, taining=is_training, name='batch_norm')
+        relu = tf.relu(batch_norm)
+        pool = tf.nn.max_pool(relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID')
         return pool
 
-    def add_model(self, support_points, support_labels, query_points):
+    def add_model(self, support_points, support_labels, query_points, is_training):
         # compute embeddings of all examples
         with tf.variable_scope('embedding') as scope:
-            support_embedding = self.add_embedding(support_points)
+            support_embedding = self.add_embedding(support_points, is_training)
             scope.reuse_variables()
-            query_embedding = self.add_embedding(query_points)
+            query_embedding = self.add_embedding(query_points, is_training)
 
         # create prototypes for each class
         ones = tf.ones_like(support_embedding)
@@ -117,9 +126,11 @@ class PrototypicalNetwork(Model):
         return distances
 
     def add_training_op(self, loss):
-        # TODO: check this is the right optimizer, finish this
-        optimizer = tf.train.GradientDescentOptimizer(self.lr)
-
+        # TODO: check this is the right optimizer
+        optimizer = tf.train.AdamOptimizer(self.lr)
+        global_step = tf.get_variable("global_step", [1], dtype=tf.int32, trainable=False, initializer=tf.zeros_initializer)
+        train_op = optimizer.minimize(loss, global_step=global_step)
+        return train_op
 
     def add_loss_op(self, distances, query_labels):
         # this won't work right now because of the labels values i.e. we don't produce logits
@@ -135,6 +146,7 @@ class PrototypicalNetwork(Model):
         return loss, summary_op
 
     def run_epoch(self, sess, support_points, query_points, support_labels, query_labels):
+        # TODO: set is training to true
         """Runs an epoch of training.
 
         Trains the model for one-epoch.
@@ -149,13 +161,13 @@ class PrototypicalNetwork(Model):
         average_loss = 0.0
         iterator = data_iterator(support_points, support_labels, query_points, query_labels)
         for i, (sprt_batch, sprt_label_batch, qry_batch, qry_label_batch) in enumerate(iterator):
-            feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch)
+            feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, True)
             _, loss = sess.run([self.train_op, self.loss], feed_dict=feed_dict)
             average_loss += loss
         average_loss = average_loss / len(iterator)
         return average_loss
 
-      def fit(self, sess, input_data, input_labels):
+      def fit(self, sess, support_points, query_points, support_labels, query_labels):
         """Fit model on provided data.
 
         Args:
@@ -165,9 +177,15 @@ class PrototypicalNetwork(Model):
         Returns:
           losses: list of loss per epoch
         """
-        raise NotImplementedError("Each Model must re-implement this method.")
+        losses = []
+        for epoch in range(self.num_max_epochs):
+            average_loss = self.run_epoch(sess, support_points, query_points, support_labels, query_labels)
+            losses.append(average_loss)
+        return losses
+
 
       def predict(self, sess, input_data, input_labels=None):
+        # TODO: set is_training to false
         """Make predictions from the provided model.
         Args:
           sess: tf.Session()
@@ -177,8 +195,6 @@ class PrototypicalNetwork(Model):
           average_loss: Average loss of model.
           predictions: Predictions of model on input_data
         """
-
-
 
 
 

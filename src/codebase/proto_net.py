@@ -1,12 +1,12 @@
 import tensorflow as tf
 import argparse
 import copy
-import torchfile
 import numpy as np
 import os
 from datetime import datetime
 
 from model import Model
+from OmniglotGenerator import OmniglotGenerator
 
 CURRENT_DIR = os.path.dirname(__file__)
 
@@ -18,7 +18,7 @@ parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '..
 
 parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate step-size')
 # TODO: cut learning rate in half every 2000 episodes
-parser.add_argument('--num_max_epochs', type=int, default=2000*6)
+parser.add_argument('--num_max_episodes', type=int, default=2000*6)
 parser.add_argument('--image_dim', type=int, default=28*28)
 parser.add_argument('--num_classes_per_ep', type=int, default=1, help='Number of classes per episode')
 parser.add_argument('--num_support_points_per_class', type=int, default=1, help='Number of support points per class')
@@ -40,6 +40,7 @@ class PrototypicalNetwork(Model):
         self.data_dir = config.data_dir
 
         self.lr = config.lr
+        self.num_max_episodes = config.num_max_episodes
         self.image_dim = config.image_dim
         self.num_classes_per_ep = config.num_classes_per_ep
         self.num_support_points_per_class = config.num_support_points_per_class
@@ -48,9 +49,12 @@ class PrototypicalNetwork(Model):
 
         self.load_data()
         self.add_placeholders()
-        predictions, accuracy_op = self.predict(support_points, query_points, support_labels, labels)
-        loss, loss_summary = self.add_loss_op(distances, query_labels)
-        train_op = self.add_training_op(loss)
+        self.predictions, self.accuracy_op = self.predict(support_points, query_points, support_labels, labels)
+        self.loss, self.loss_summary = self.add_loss_op(distances, query_labels)
+        self.train_op = self.add_training_op(loss)
+
+    def load_data(self):
+        self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes)
 
     def add_place_holders(self):
         support_points_per_ep = self.num_classes_per_ep * self.num_support_points_per_class
@@ -137,32 +141,7 @@ class PrototypicalNetwork(Model):
             summary_op = tf.summary.merge_all()
         return loss, summary_op
 
-    def run_epoch(self, sess, support_points, query_points, support_labels, query_labels):
-        # TODO: set is training to true
-        """Runs an epoch of training.
-
-        Trains the model for one-epoch.
-
-        Args:
-          sess: tf.Session() object
-          input_data: np.ndarray of shape (n_samples, n_features)
-          input_labels: np.ndarray of shape (n_samples, n_classes)
-        Returns:
-          average_loss: scalar. Average minibatch loss of model on epoch.
-        """
-        average_loss = 0.0
-        data = (support_points, query_points, support_labels, query_labels)
-        config = (self.num_classes_per_ep, self.num_support_points_per_class, self.num_query_points_per_class)
-        iterator = data_iterator(*data, *config)
-        for i, (sprt_batch, sprt_label_batch, qry_batch, qry_label_batch) in enumerate(iterator):
-            feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, True)
-            _, loss, summary = sess.run([self.train_op, self.loss, self.loss_summary], feed_dict=feed_dict)
-            self.summary_writer.add_summary(summary, epoch)
-            average_loss += loss
-        average_loss = average_loss / len(iterator)
-        return average_loss
-
-      def fit(self, sess, support_points, query_points, support_labels, query_labels):
+      def fit(self, sess):
         """Fit model on provided data.
 
         Args:
@@ -174,10 +153,11 @@ class PrototypicalNetwork(Model):
         """
         losses = []
         self.summary_writer = tf.summary.FileWriter(self.log_dir, graph=tf.get_default_graph())
-        data = (support_points, query_points, support_labels, query_labels)
-        for epoch in range(self.num_max_epochs):
-            average_loss = self.run_epoch(sess, *data)
-            losses.append(average_loss)
+        for i, ((sprt_batch, sprt_label_batch, qry_batch, qry_label_batch) in enumerate(self.data_generator):
+            feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, True)
+            _, loss, summary = sess.run([self.train_op, self.loss, self.loss_summary], feed_dict=feed_dict)
+            self.summary_writer.add_summary(summary, i)
+            losses.append(loss)
         return losses
 
       def predict(self, support_points, query_points, support_labels, is_training, query_labels=None):
@@ -196,43 +176,10 @@ class PrototypicalNetwork(Model):
         if query_labels not None:
             accuracy_op = tf.metrics.accuracy(labels=query_labels, predictions)
         return predictions, accuracy_op
-    '''
-    def model_fn(self, features, labels, mode, params, config):
-        # features = {'support_points' : support_points, 'support_labels' : support_labels, 'query_points' : query_points}
-        # labels   = query_labels
-        # ^ None in PREDICT mode
-        # mode = tf.estimator.ModeKeys.TRAIN, EVAL, PREDICT
-        # params = dict of hyper parameters
-        # config = optional config argument
-        support_points, support_labels = features['support_points'], features['support_labels']
-        query_points = features['query_points']
-
-        eval_metric_ops = {}
-        is_training = False
-        if mode == tf.estimator.ModeKeys.TRAIN:
-            is_training = True
-
-        predictions, accuracy_op = self.predict(support_points, query_points, support_labels, labels)
-        loss, loss_summary = self.add_loss_op(distances, query_labels)
-        train_op = self.add_training_op(loss)
-        if mode not tf.estimator.ModeKeys.PREDICT:
-            eval_metric_ops['accuracy'] = accuracy_op
-
-        estimator_spec = tf.estimator.EstimatorSpec(
-            mode=mode,
-            predictions=predictions,
-            loss=loss,
-            train_op=train_op,
-            eval_metric_ops=eval_metric_ops
-        )
-       return estimator_spec
-    '''
 
 if __name__ == "__main__":
     config = parser.parse_args()
     net = PrototypicalNetwork(config)
-
-
-
-
+    sess = tf.InteractiveSession()
+    net.fit(sess)
 

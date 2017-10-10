@@ -60,9 +60,9 @@ class OmniglotGenerator(object):
         ep_classes = ep_classes[perm]
         num_support_points = self.num_classes_per_ep * self.num_support_points_per_class
         num_query_points = self.num_classes_per_ep * self.num_query_points_per_class
-        support_points = np.zeros((num_support_points, 28*28))
+        support_points = np.zeros((num_support_points, 28, 28, 1))
         support_labels = np.zeros((num_support_points))
-        query_points = np.zeros((num_query_points, 28*28))
+        query_points = np.zeros((num_query_points, 28, 28, 1))
         query_labels = np.zeros((num_query_points))
 
         for k, (r, dir) in enumerate(ep_classes):
@@ -73,9 +73,9 @@ class OmniglotGenerator(object):
             support_files_k = [dir + '/' + sp for sp in support_points_k]
             query_files_k = [dir + '/' + qp for qp in query_points_k]
             num_sp, num_qp = self.num_support_points_per_class, self.num_query_points_per_class
-            support_points[k*num_sp:(k+1)*num_sp, :] = self.image_data_for_files(support_files_k, float(r))
+            support_points[k*num_sp:(k+1)*num_sp, :, :, :] = self.image_data_for_files(support_files_k, float(r))
             support_labels[k*num_sp:(k+1)*num_sp] = k
-            query_points[k*num_qp:(k+1)*num_qp, :] = self.image_data_for_files(query_files_k, float(r))
+            query_points[k*num_qp:(k+1)*num_qp, :, :, :] = self.image_data_for_files(query_files_k, float(r))
             query_labels[k*num_qp:(k+1)*num_qp] = k
 
         support_perm = np.random.permutation(num_support_points)
@@ -89,10 +89,10 @@ class OmniglotGenerator(object):
 
     def image_data_for_files(self, file_paths, degree_rotation):
         num_files = len(file_paths)
-        images = np.zeros((num_files, 28*28))
+        images = np.zeros((num_files, 28, 28, 1))
         for i, path in enumerate(file_paths):
             original = imread(path)
             resized = imresize(original, (28, 28))
-            rotated = rotate(resized, angle=degree_rotation).flatten()
-            images[i, :] = rotated
+            rotated = rotate(resized, angle=degree_rotation)
+            images[i, :, :, :] = rotated
         return images

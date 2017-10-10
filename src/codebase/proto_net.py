@@ -11,7 +11,7 @@ from OmniglotGenerator import OmniglotGenerator
 CURRENT_DIR = os.path.dirname(__file__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', type=str, default=os.path.join(CURRENT_DIR, '../dat'))
+parser.add_argument('--data_dir', type=str, default=os.path.join('/home/jason/datasets/omniglot_images'))
 parser.add_argument('--checkpoint_dir', type=str, default=os.path.join(CURRENT_DIR, '../checkpoints'))
 parser.add_argument('--output_dir', type=str, default=os.path.join(CURRENT_DIR, '../out'))
 parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '../log'))
@@ -19,17 +19,17 @@ parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '..
 parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate step-size')
 # TODO: cut learning rate in half every 2000 episodes
 parser.add_argument('--num_max_episodes', type=int, default=2000*6)
-parser.add_argument('--image_dim', type=int, default=28*28)
-parser.add_argument('--num_classes_per_ep', type=int, default=1, help='Number of classes per episode')
-parser.add_argument('--num_support_points_per_class', type=int, default=1, help='Number of support points per class')
-parser.add_argument('--num_query_points_per_class', type=int, default=10, help='Number of query points per class')
+parser.add_argument('--image_dim', type=int, default=(28, 28))
+parser.add_argument('--num_classes_per_ep', type=int, default=60, help='Number of classes per episode')
+parser.add_argument('--num_support_points_per_class', type=int, default=5, help='Number of support points per class')
+parser.add_argument('--num_query_points_per_class', type=int, default=5, help='Number of query points per class')
 
 
 class PrototypicalNetwork(Model):
 
     def __init__(self, config):
         date_time = datetime.today().strftime('%Y%m%d_%H%M%S')
-        hyper_params = 'lr_'+str(config.lr)+'max_ep_'+str(config.num_max_ep)+\
+        hyper_params = 'lr_'+str(config.lr)+'max_ep_'+str(config.num_max_episodes)+\
                        'num_sprt_'+str(config.num_support_points_per_class)+\
                        'num_qry_'+str(config.num_query_points_per_class)
         suffix = '_' + date_time + '_' + hyper_params + '/'
@@ -49,19 +49,23 @@ class PrototypicalNetwork(Model):
 
         self.load_data()
         self.add_placeholders()
-        self.predictions, self.accuracy_op = self.predict(support_points, query_points, support_labels, labels)
+        data = (self.support_points_placeholder, self.query_points_placeholder, self.support_labels_placeholder, \
+                self.is_training_placeholder, self.query_labels_placeholder)
+        self.predictions, self.accuracy_op = self.predict(*data)
         self.loss, self.loss_summary = self.add_loss_op(distances, query_labels)
         self.train_op = self.add_training_op(loss)
 
     def load_data(self):
-        self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes)
+        self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes, self.num_classes_per_ep, \
+                                                self.num_support_points_per_class, self.num_query_points_per_class)
 
-    def add_place_holders(self):
+    def add_placeholders(self):
         support_points_per_ep = self.num_classes_per_ep * self.num_support_points_per_class
         query_points_per_ep   = self.num_classes_per_ep * self.num_query_points_per_class
-        self.support_points_placeholder = tf.placeholder(tf.float32, shape=(support_points_per_ep, self.image_dim, name='support_points')
+        height, width = self.image_dim
+        self.support_points_placeholder = tf.placeholder(tf.float32, shape=(support_points_per_ep, height, width, 1), name='support_points')
         self.support_labels_placeholder = tf.placeholder(tf.int32, shape=(support_points_per_ep), name='support_labels')
-        self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points_per_ep, self.image_dim), name='query_points')
+        self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points_per_ep, height, width, 1), name='query_points')
         self.query_labels_placeholder = tf.placeholder(tf.int32, shape=(query_points_per_ep), name='query_labels')
         self.is_training_placeholder = tf.placeholder(tf.bool, name='is_training')
 
@@ -141,7 +145,7 @@ class PrototypicalNetwork(Model):
             summary_op = tf.summary.merge_all()
         return loss, summary_op
 
-      def fit(self, sess):
+    def fit(self, sess):
         """Fit model on provided data.
 
         Args:
@@ -153,14 +157,14 @@ class PrototypicalNetwork(Model):
         """
         losses = []
         self.summary_writer = tf.summary.FileWriter(self.log_dir, graph=tf.get_default_graph())
-        for i, ((sprt_batch, sprt_label_batch, qry_batch, qry_label_batch) in enumerate(self.data_generator):
+        for i, ((sprt_label_batch, sprt_batch), (qry_label_batch, qry_batch)) in enumerate(self.data_generator):
             feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, True)
             _, loss, summary = sess.run([self.train_op, self.loss, self.loss_summary], feed_dict=feed_dict)
             self.summary_writer.add_summary(summary, i)
             losses.append(loss)
         return losses
 
-      def predict(self, support_points, query_points, support_labels, is_training, query_labels=None):
+    def predict(self, support_points, query_points, support_labels, is_training, query_labels=None):
         # TODO: set is_training to false. Maybe return accuracy
         """Make predictions from the provided model.
         Args:
@@ -173,8 +177,8 @@ class PrototypicalNetwork(Model):
         """
         distances = self.add_model(support_points, query_points, support_labels, is_training)
         predictions = tf.argmax(distances, axis=1)
-        if query_labels not None:
-            accuracy_op = tf.metrics.accuracy(labels=query_labels, predictions)
+        if query_labels != None:
+            accuracy_op = tf.metrics.accuracy(query_labels, predictions)
         return predictions, accuracy_op
 
 if __name__ == "__main__":

@@ -52,38 +52,6 @@ class PrototypicalNetwork(Model):
         loss, loss_summary = self.add_loss_op(distances, query_labels)
         train_op = self.add_training_op(loss)
 
-    def load_data(self):
-        """ We follow the procedure of Vinyals et al. [29] by resizing the grayscale images to 28 × 28 and
-        augmenting the character classes with rotations in multiples of 90 degrees. We use 1200 characters
-        plus rotations for training (4,800 classes in total) and the remaining classes, including rotations, for
-        test.
-        """
-        labels = np.array(os.listdir(self.data_dir))
-        # select 1200 characters (i.e. classes) for training set
-        train_idxs = np.random.choice(len(labels), size=1200, replace=False)
-        train_labels = labels[train_idxs]
-        mask = np.ones(len(labels), np.bool)
-        mask[train_idxs] = 0
-        # select remaining characters for test set
-        test_labels = labels[mask]
-        train_y , train_x = self.data_for_classes(train_labels)
-        test_y, test_x = self.data_for_classes(test_labels)
-        # TODO: from these train and test sets you need to for each episode
-        # select a subset of Nc classes
-        # select support points for each class
-        # select query points for each class
-
-    def data_for_classes(self, classes):
-        filenames = [self.data_dir+'/'+str(c)+'/'+f for c in classes for f in os.listdir(self.data_dir+'/'+str(c))]
-        filenames = tf.convert_to_tensor(filenames, dtype=tf.string)
-        labels = tf.convert_to_tensor([int(c) for c classes], dtype=tf.int32)
-        filename_queue = tf.train.string_input_producer(filenames)
-        reader = tf.WholeFileReader()
-        key, value = reader.read(filename_queue)
-        images = tf.image.decode_png(value)
-        # may have to do this images.set_shape([])
-        labels, images
-
     def add_place_holders(self):
         support_points_per_ep = self.num_classes_per_ep * self.num_support_points_per_class
         query_points_per_ep   = self.num_classes_per_ep * self.num_query_points_per_class

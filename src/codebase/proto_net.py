@@ -63,11 +63,12 @@ class PrototypicalNetwork(Model):
         support_points_per_ep = self.num_classes_per_ep * self.num_support_points_per_class
         query_points_per_ep   = self.num_classes_per_ep * self.num_query_points_per_class
         height, width = self.image_dim
-        self.support_points_placeholder = tf.placeholder(tf.float32, shape=(support_points_per_ep, height, width, 1), name='support_points')
-        self.support_labels_placeholder = tf.placeholder(tf.int32, shape=(support_points_per_ep), name='support_labels')
-        self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points_per_ep, height, width, 1), name='query_points')
-        self.query_labels_placeholder = tf.placeholder(tf.int32, shape=(query_points_per_ep), name='query_labels')
-        self.is_training_placeholder = tf.placeholder(tf.bool, name='is_training')
+        with tf.name_scope('data'):
+            self.support_points_placeholder = tf.placeholder(tf.float32, shape=(support_points_per_ep, height, width, 1), name='support_points')
+            self.support_labels_placeholder = tf.placeholder(tf.int32, shape=(support_points_per_ep), name='support_labels')
+            self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points_per_ep, height, width, 1), name='query_points')
+            self.query_labels_placeholder = tf.placeholder(tf.int32, shape=(query_points_per_ep), name='query_labels')
+            self.is_training_placeholder = tf.placeholder(tf.bool, name='is_training')
 
     def create_feed_dict(self, support_points, support_labels, query_points, query_labels, is_training):
         feed_dict = {
@@ -81,62 +82,67 @@ class PrototypicalNetwork(Model):
 
     def add_embedding(self, images, is_training):
         # in dim: Nx28x28x1 => outdim: Nx14x14x64
-        with tf.variable_scope('conv1') as scope:
+        with tf.variable_scope('block1'):
             conv1 = self.conv_bn_relu_pool(images, is_training, [3, 3, 1, 64], [64])
         # in dim: Nx14x14x64 => outdim: Nx7x7x64
-        with tf.variable_scope('conv2') as scope:
+        with tf.variable_scope('block2'):
             conv2 = self.conv_bn_relu_pool(conv1, is_training, [3, 3, 64, 64], [64])
         # in dim: Nx7x7x64 => outdim: Nx3x3x64
-        with tf.variable_scope('conv3') as scope:
+        with tf.variable_scope('block3'):
             conv3 = self.conv_bn_relu_pool(conv2, is_training, [3, 3, 64, 64], [64])
         # in dim: Nx3x3x64 => outdim: Nx1x1x64
-        with tf.variable_scope('conv4') as scope:
+        with tf.variable_scope('block4'):
             conv4 = self.conv_bn_relu_pool(conv3, is_training, [3, 3, 64, 64], [64])
         return conv4
 
     def conv_bn_relu_pool(self, input, is_training, kernel_shape, bias_shape):
         weights = tf.get_variable("weights", kernel_shape, initializer=tf.random_normal_initializer())
         biases = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
-        conv = tf.nn.conv2d(input, weights, strides=[1, 1, 1, 1], padding='SAME')
+        conv = tf.nn.conv2d(input, weights, strides=[1, 1, 1, 1], padding='SAME', name='conv_3x3')
         # TODO: double check that batchnorm is being reused for a given layer
         batch_norm = tf.layers.batch_normalization(conv + biases, training=is_training, name='batch_norm')
-        relu = tf.nn.relu(batch_norm)
-        pool = tf.nn.max_pool(relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID')
+        relu = tf.nn.relu(batch_norm, name='relu')
+        pool = tf.nn.max_pool(relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID', 'max_pool_2x2')
         return pool
 
     def add_model(self, support_points, support_labels, query_points, is_training):
         # compute embeddings of all examples
+        # TODO: double check that weights are shared
         with tf.variable_scope('embedding') as scope:
             support_embedding = tf.squeeze(self.add_embedding(support_points, is_training))
             scope.reuse_variables()
             query_embedding = tf.squeeze(self.add_embedding(query_points, is_training))
 
         # create prototypes for each class
-        ones = tf.ones_like(support_embedding)
-        per_class_embedding_sum = tf.unsorted_segment_sum(support_embedding, support_labels, self.num_classes_per_ep, name='embedding_sum')
-        class_counts = tf.unsorted_segment_sum(ones, support_labels, self.num_classes_per_ep)
-        class_prototypes = per_class_embedding_sum / class_counts
+        with tf.name_scope('prototype'):
+            ones = tf.ones_like(support_embedding)
+            per_class_embedding_sum = tf.unsorted_segment_sum(support_embedding, support_labels, self.num_classes_per_ep, name='embedding_sum')
+            class_counts = tf.unsorted_segment_sum(ones, support_labels, self.num_classes_per_ep, name='class_counts')
+            class_prototypes = per_class_embedding_sum / class_counts
 
         #dist = np.sqrt(np.sum(X**2, axis=1).reshape(-1, 1) - 2*X.dot(self.X_train.T) + np.sum(self.X_train**2, axis=1))
         # dists[i, j] is the Euclidean distance between the ith test point and the jth trainin
         # dists[i, j] distance between ith query_point and jth prototype
-        query_square_sum = tf.reshape(tf.reduce_sum(tf.square(query_embedding), 1), shape=[-1, 1])
-        proto_square_sum = tf.reduce_sum(tf.square(class_prototypes), 1)
-        distances = tf.add(query_square_sum, proto_square_sum) - 2*tf.matmul(query_embedding, class_prototypes, transpose_b=True)
+        with tf.name_scope('distance'):
+            query_square_sum = tf.reshape(tf.reduce_sum(tf.square(query_embedding), 1), shape=[-1, 1], name='query_square_sum')
+            proto_square_sum = tf.reduce_sum(tf.square(class_prototypes), 1, name='proto_square_sum')
+            distances = tf.add(query_square_sum, proto_square_sum, name='square_sum') - 2*tf.matmul(query_embedding, class_prototypes, transpose_b=True, name='cross_term')
         return distances
 
     def add_training_op(self, loss):
         # TODO: check this is the right optimizer
-        optimizer = tf.train.AdamOptimizer(self.lr)
-        train_op = optimizer.minimize(loss, tf.train.get_global_step())
+        with tf.name_scope('optimizer'):
+            optimizer = tf.train.AdamOptimizer(self.lr)
+            train_op = optimizer.minimize(loss, tf.train.get_global_step())
         return train_op
 
     def add_loss_op(self, distances, query_labels):
         # this won't work right now because of the labels values i.e. we don't produce logits
         # for each label they're only for the num_classes_per_ep
         # TODO: make sure the sign on the distances is correct
-        entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=query_labels, logits=distances*-1.0)
-        loss = tf.reduce_mean(entropy, name='loss')
+        with tf.name_scope('loss'):
+            entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=query_labels, logits=distances*-1.0)
+            loss = tf.reduce_mean(entropy, name='loss')
         # not sure exactly what this does
         with tf.name_scope('summaries'):
             tf.summary.scalar('loss', loss)

@@ -29,14 +29,15 @@ class PrototypicalNetwork(Model):
 
     def __init__(self, config):
         date_time = datetime.today().strftime('%Y%m%d_%H%M%S')
-        hyper_params = 'lr_'+str(config.lr)+'max_ep_'+str(config.num_max_episodes)+\
-                       'num_sprt_'+str(config.num_support_points_per_class)+\
-                       'num_qry_'+str(config.num_query_points_per_class)
-        suffix = '_' + date_time + '_' + hyper_params + '/'
+        hyper_params = 'lr_'+str(config.lr)+'_max_ep_'+str(config.num_max_episodes)+\
+                       '_num_support_'+str(config.num_support_points_per_class)+\
+                       '_num_query_'+str(config.num_query_points_per_class)+\
+                       '_num_classes_'+str(config.num_classes_per_ep)
+        subdir = date_time + '_' + hyper_params + '/'
 
-        self.log_dir = config.log_dir + suffix
-        self.checkpoint_dir = config.checkpoint_dir + suffix
-        self.output_dir = config.output_dir + suffix
+        self.log_dir = config.log_dir + '/' + subdir
+        self.checkpoint_dir = config.checkpoint_dir + '/' + subdir
+        self.output_dir = config.output_dir + '/' + subdir
         self.data_dir = config.data_dir
 
         self.lr = config.lr
@@ -49,11 +50,10 @@ class PrototypicalNetwork(Model):
 
         self.load_data()
         self.add_placeholders()
-        data = (self.support_points_placeholder, self.query_points_placeholder, self.support_labels_placeholder, \
-                self.is_training_placeholder, self.query_labels_placeholder)
-        self.predictions, self.accuracy_op = self.predict(*data)
-        self.loss, self.loss_summary = self.add_loss_op(distances, query_labels)
-        self.train_op = self.add_training_op(loss)
+        data = (self.support_points_placeholder, self.support_labels_placeholder, self.query_points_placeholder, self.is_training_placeholder)
+        self.pred = self.add_model(*data)
+        self.loss, self.loss_summary = self.add_loss_op(self.pred, self.query_labels_placeholder)
+        self.train_op = self.add_training_op(self.loss)
 
     def load_data(self):
         self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes, self.num_classes_per_ep, \
@@ -99,17 +99,17 @@ class PrototypicalNetwork(Model):
         biases = tf.get_variable("biases", bias_shape, initializer=tf.constant_initializer(0.0))
         conv = tf.nn.conv2d(input, weights, strides=[1, 1, 1, 1], padding='SAME')
         # TODO: double check that batchnorm is being reused for a given layer
-        batch_norm = tf.layers.batch_normalization(conv + biases, taining=is_training, name='batch_norm')
-        relu = tf.relu(batch_norm)
+        batch_norm = tf.layers.batch_normalization(conv + biases, training=is_training, name='batch_norm')
+        relu = tf.nn.relu(batch_norm)
         pool = tf.nn.max_pool(relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID')
         return pool
 
     def add_model(self, support_points, support_labels, query_points, is_training):
         # compute embeddings of all examples
         with tf.variable_scope('embedding') as scope:
-            support_embedding = self.add_embedding(support_points, is_training)
+            support_embedding = tf.squeeze(self.add_embedding(support_points, is_training))
             scope.reuse_variables()
-            query_embedding = self.add_embedding(query_points, is_training)
+            query_embedding = tf.squeeze(self.add_embedding(query_points, is_training))
 
         # create prototypes for each class
         ones = tf.ones_like(support_embedding)
@@ -128,8 +128,7 @@ class PrototypicalNetwork(Model):
     def add_training_op(self, loss):
         # TODO: check this is the right optimizer
         optimizer = tf.train.AdamOptimizer(self.lr)
-        global_step = tf.get_variable("global_step", [1], dtype=tf.int32, trainable=False, initializer=tf.zeros_initializer)
-        train_op = optimizer.minimize(loss, global_step=global_step)
+        train_op = optimizer.minimize(loss, tf.train.get_global_step())
         return train_op
 
     def add_loss_op(self, distances, query_labels):
@@ -175,7 +174,7 @@ class PrototypicalNetwork(Model):
           average_loss: Average loss of model.
           predictions: Predictions of model on input_data
         """
-        distances = self.add_model(support_points, query_points, support_labels, is_training)
+        distances = self.add_model(support_points, support_labels, query_points, is_training)
         predictions = tf.argmax(distances, axis=1)
         if query_labels != None:
             accuracy_op = tf.metrics.accuracy(query_labels, predictions)
@@ -184,6 +183,8 @@ class PrototypicalNetwork(Model):
 if __name__ == "__main__":
     config = parser.parse_args()
     net = PrototypicalNetwork(config)
-    sess = tf.InteractiveSession()
-    net.fit(sess)
+    init = tf.global_variables_initializer()
+    with tf.Session() as sess:
+        sess.run(init)
+        net.fit(sess)
 

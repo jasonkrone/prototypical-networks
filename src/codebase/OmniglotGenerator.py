@@ -94,5 +94,5 @@ class OmniglotGenerator(object):
             original = imread(path)
             resized = imresize(original, (28, 28))
             rotated = rotate(resized, angle=degree_rotation)
-            images[i, :, :, :] = rotated
+            images[i, :, :, 0] = rotated
         return images

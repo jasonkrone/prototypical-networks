@@ -11,7 +11,7 @@ class OmniglotGenerator(object):
         self.num_classes_per_ep = num_classes_per_ep
         self.num_support_points_per_class = num_support_points_per_class
         self.num_query_points_per_class = num_query_points_per_class
-        self.mode = mode 
+        self.mode = mode
         self.data_dir = data_dir
         self.max_iter = max_iter
         self.cur_iter = 0
@@ -57,38 +57,52 @@ class OmniglotGenerator(object):
             raise StopIteration
 
     def sample_episode(self, classes):
+        # randomly sample num_classes from the train or test class list
         ep_idxs = np.random.choice(len(classes), size=self.num_classes_per_ep, replace=False)
-        ep_classes = classes[ep_idxs]
+        ep_classes  = classes[ep_idxs]
+        # shuffle classes, this may be unecessary
         perm = np.random.permutation(self.num_classes_per_ep)
         ep_classes = ep_classes[perm]
         num_support_points = self.num_classes_per_ep * self.num_support_points_per_class
         num_query_points = self.num_classes_per_ep * self.num_query_points_per_class
         support_points = np.zeros((num_support_points, 28, 28, 1))
         support_labels = np.zeros((num_support_points))
+        # keep track of mapping between str labels and int labels
+        support_label_names = []
         query_points = np.zeros((num_query_points, 28, 28, 1))
         query_labels = np.zeros((num_query_points))
+        query_label_names = []
 
         for k, (r, dir) in enumerate(ep_classes):
             num_points = self.num_support_points_per_class+self.num_query_points_per_class
+            # randomly sample support points and query points for each class
             points = np.random.choice(self.class_instances, size=num_points, replace=False)
             support_points_k = points[:self.num_support_points_per_class]
             query_points_k = points[self.num_support_points_per_class:num_points]
+            # get paths to selected examples for class k
             support_files_k = [dir + '/' + sp for sp in support_points_k]
             query_files_k = [dir + '/' + qp for qp in query_points_k]
             num_sp, num_qp = self.num_support_points_per_class, self.num_query_points_per_class
+            # load image data from disk and set labels
             support_points[k*num_sp:(k+1)*num_sp, :, :, :] = self.image_data_for_files(support_files_k, float(r))
             support_labels[k*num_sp:(k+1)*num_sp] = k
+            support_label_names += [(r, sf) for sf in support_files_k]
             query_points[k*num_qp:(k+1)*num_qp, :, :, :] = self.image_data_for_files(query_files_k, float(r))
             query_labels[k*num_qp:(k+1)*num_qp] = k
+            query_label_names += [(r, qf) for qf in query_files_k]
 
+        support_label_names = np.array(support_label_names)
+        query_label_names = np.array(query_label_names)
+        # shuffle support and query set so classes don't appear in order
         support_perm = np.random.permutation(num_support_points)
-        support_labels = support_labels[support_perm]
         support_points = support_points[support_perm]
+        support_labels = support_labels[support_perm]
+        support_label_names = support_label_names[support_perm]
         query_perm = np.random.permutation(num_query_points)
-        query_labels = query_labels[query_perm]
         query_points = query_points[query_perm]
-        return (support_labels, support_points), (query_labels, query_points)
-
+        query_labels = query_labels[query_perm]
+        query_label_names = query_label_names[query_perm]
+        return (support_labels, support_points, support_label_names), (query_labels, query_points, query_label_names)
 
     def image_data_for_files(self, file_paths, degree_rotation):
         num_files = len(file_paths)

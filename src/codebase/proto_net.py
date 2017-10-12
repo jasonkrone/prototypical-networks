@@ -17,11 +17,11 @@ parser.add_argument('--output_dir', type=str, default=os.path.join(CURRENT_DIR, 
 parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '../log'))
 parser.add_argument('--checkpoint', type=str, default=None)
 
-parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate step-size')
+parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate step-size')
 # TODO: cut learning rate in half every 2000 episodes
 parser.add_argument('--num_max_episodes', type=int, default=2000*200)
 parser.add_argument('--image_dim', type=int, default=(28, 28))
-parser.add_argument('--num_steps_per_checkpoint', type=int, default=50, help='Number of steps between checkpoints')
+parser.add_argument('--num_steps_per_checkpoint', type=int, default=100, help='Number of steps between checkpoints')
 parser.add_argument('--num_classes_per_ep', type=int, default=60, help='Number of classes per episode')
 parser.add_argument('--num_support_points_per_class', type=int, default=5, help='Number of support points per class')
 parser.add_argument('--num_query_points_per_class', type=int, default=5, help='Number of query points per class')
@@ -56,9 +56,9 @@ class PrototypicalNetwork(Model):
         self.add_placeholders()
         data = (self.support_points_placeholder, self.support_labels_placeholder, self.query_points_placeholder, self.is_training_placeholder)
         self.distances = self.add_model(*data)
+        self.preds, self.accuracy_op = self.predict(self.distances, self.query_labels_placeholder)
         self.loss, self.loss_summary = self.add_loss_op(self.distances, self.query_labels_placeholder)
         self.train_op = self.add_training_op(self.loss)
-        self.preds, self.accuracy_op = self.predict(self.distances, self.query_labels_placeholder)
 
     def load_data(self):
         self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes, self.num_classes_per_ep, \
@@ -70,9 +70,9 @@ class PrototypicalNetwork(Model):
         height, width = self.image_dim
         with tf.name_scope('data'):
             self.support_points_placeholder = tf.placeholder(tf.float32, shape=(support_points_per_ep, height, width, 1), name='support_points')
-            self.support_labels_placeholder = tf.placeholder(tf.int32, shape=(support_points_per_ep), name='support_labels')
+            self.support_labels_placeholder = tf.placeholder(tf.int64, shape=(support_points_per_ep), name='support_labels')
             self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points_per_ep, height, width, 1), name='query_points')
-            self.query_labels_placeholder = tf.placeholder(tf.int32, shape=(query_points_per_ep), name='query_labels')
+            self.query_labels_placeholder = tf.placeholder(tf.int64, shape=(query_points_per_ep), name='query_labels')
             self.is_training_placeholder = tf.placeholder(tf.bool, name='is_training')
 
     def create_feed_dict(self, support_points, support_labels, query_points, query_labels, is_training):
@@ -175,25 +175,29 @@ class PrototypicalNetwork(Model):
             losses.append(loss)
             if (i + 1) % self.num_steps_per_checkpoint == 0:
                 saver.save(sess, self.checkpoint_dir, step)
-                ave_accuracy, accuracy_summary = self.validate(sess)
-                self.summary_writer.add_summary(accuracy_summary, step)
+            # evaluate on test set
+            if (i + 1) % self.num_steps_per_checkpoint == 0 or i == 0:
+                ave_accuracy = self.run_validation(sess)
+                summary = tf.Summary()
+                summary.value.add(tag='validation accuracy', simple_value=ave_accuracy)
+                self.summary_writer.add_summary(summary)
+            # every 2000 episodes cut the learning rate in half
+            if (i + 1) % 2000:
+                self.lr = self.lr * 0.5
         return losses
 
-    def validate(self, sess):
+    def run_validation(self, sess):
         self.data_generator.mode = 'test'
         ave_accuracy = 0.0
         for i, ((sprt_label_batch, sprt_batch), (qry_label_batch, qry_batch)) in enumerate(self.data_generator):
-            if i == 100:
+            if i == 20:
                 break
             feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, False)
-            ave_accuracy += sess.run([self.accuracy_op], feed_dict=feed_dict)
-        ave_accuracy = ave_accuracy / 100.0
-        with tf.name_scope('summaries'):
-            tf.summary.scalar('ave_accuracy', ave_accuracy)
-            tf.summary.histogram('histogram ave_accuracy', ave_accuracy)
-            accuracy_summary = tf.summary.merge_all()
+            accuracy = sess.run([self.accuracy_op], feed_dict=feed_dict)[0]
+            ave_accuracy += accuracy
+        ave_accuracy = ave_accuracy / 20.0
         self.data_generator.mode = 'train'
-        return ave_accuracy, accuracy_summary
+        return ave_accuracy
 
     def predict(self, distances, query_labels=None):
         # TODO: set is_training to false. Maybe return accuracy
@@ -206,9 +210,13 @@ class PrototypicalNetwork(Model):
           average_loss: Average loss of model.
           predictions: Predictions of model on input_data
         """
-        predictions = tf.argmax(distances, axis=1)
-        #if query_labels != None:
-        accuracy_op = tf.metrics.accuracy(query_labels, predictions)
+        with tf.name_scope('predictions'):
+            logits = -1.0 * distances
+            predictions = tf.argmax(tf.nn.softmax(logits), 1)
+        if query_labels != None:
+            with tf.name_scope('accuracy'):
+                correct_preds = tf.equal(predictions, query_labels)
+                accuracy_op = tf.reduce_mean(tf.cast(correct_preds, tf.float32))
         return predictions, accuracy_op
 
 if __name__ == "__main__":
@@ -218,10 +226,9 @@ if __name__ == "__main__":
     saver = tf.train.Saver()
 
     with tf.Session() as sess:
-        '''
         if net.checkpoint != None:
             saver.restore(sess, net.checkpoint)
         else:
-        '''
-        sess.run(init)
-        losses = net.fit(sess, saver)
+            print 'running from blank \n\n'
+            sess.run(init)
+            losses = net.fit(sess, saver)

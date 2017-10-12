@@ -7,10 +7,11 @@ from scipy.misc import imread,imresize
 
 class OmniglotGenerator(object):
 
-    def __init__(self, data_dir, max_iter, num_classes_per_ep, num_support_points_per_class, num_query_points_per_class):
+    def __init__(self, data_dir, max_iter, num_classes_per_ep, num_support_points_per_class, num_query_points_per_class, mode='train'):
         self.num_classes_per_ep = num_classes_per_ep
         self.num_support_points_per_class = num_support_points_per_class
         self.num_query_points_per_class = num_query_points_per_class
+        self.mode = mode 
         self.data_dir = data_dir
         self.max_iter = max_iter
         self.cur_iter = 0
@@ -47,9 +48,11 @@ class OmniglotGenerator(object):
 
     def next(self):
         if (self.max_iter is None) or (self.cur_iter < self.max_iter):
-            self.cur_iter += 1
-            # TODO: maybe take a mode argument
-            return self.sample_episode(self.train_classes)
+            if self.mode == 'train':
+                self.cur_iter += 1
+                return self.sample_episode(self.train_classes)
+            elif self.mode == 'test':
+                return self.sample_episode(self.test_classes)
         else:
             raise StopIteration
 

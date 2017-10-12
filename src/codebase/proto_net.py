@@ -15,11 +15,13 @@ parser.add_argument('--data_dir', type=str, default=os.path.join('/home/jason/da
 parser.add_argument('--checkpoint_dir', type=str, default=os.path.join(CURRENT_DIR, '../checkpoints'))
 parser.add_argument('--output_dir', type=str, default=os.path.join(CURRENT_DIR, '../out'))
 parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '../log'))
+parser.add_argument('--checkpoint', type=str, default=None)
 
 parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate step-size')
 # TODO: cut learning rate in half every 2000 episodes
-parser.add_argument('--num_max_episodes', type=int, default=2000*6)
+parser.add_argument('--num_max_episodes', type=int, default=2000*200)
 parser.add_argument('--image_dim', type=int, default=(28, 28))
+parser.add_argument('--num_steps_per_checkpoint', type=int, default=50, help='Number of steps between checkpoints')
 parser.add_argument('--num_classes_per_ep', type=int, default=60, help='Number of classes per episode')
 parser.add_argument('--num_support_points_per_class', type=int, default=5, help='Number of support points per class')
 parser.add_argument('--num_query_points_per_class', type=int, default=5, help='Number of query points per class')
@@ -33,12 +35,13 @@ class PrototypicalNetwork(Model):
                        '_num_support_'+str(config.num_support_points_per_class)+\
                        '_num_query_'+str(config.num_query_points_per_class)+\
                        '_num_classes_'+str(config.num_classes_per_ep)
-        subdir = date_time + '_' + hyper_params + '/'
+        subdir = date_time + '_' + hyper_params
 
         self.log_dir = config.log_dir + '/' + subdir
         self.checkpoint_dir = config.checkpoint_dir + '/' + subdir
         self.output_dir = config.output_dir + '/' + subdir
         self.data_dir = config.data_dir
+        self.checkpoint = config.checkpoint
 
         self.lr = config.lr
         self.num_max_episodes = config.num_max_episodes
@@ -46,14 +49,16 @@ class PrototypicalNetwork(Model):
         self.num_classes_per_ep = config.num_classes_per_ep
         self.num_support_points_per_class = config.num_support_points_per_class
         self.num_query_points_per_class = config.num_query_points_per_class
+        self.num_steps_per_checkpoint = config.num_steps_per_checkpoint
         self.config = copy.deepcopy(config)
 
         self.load_data()
         self.add_placeholders()
         data = (self.support_points_placeholder, self.support_labels_placeholder, self.query_points_placeholder, self.is_training_placeholder)
-        self.pred = self.add_model(*data)
-        self.loss, self.loss_summary = self.add_loss_op(self.pred, self.query_labels_placeholder)
+        self.distances = self.add_model(*data)
+        self.loss, self.loss_summary = self.add_loss_op(self.distances, self.query_labels_placeholder)
         self.train_op = self.add_training_op(self.loss)
+        self.preds, self.accuracy_op = self.predict(self.distances, self.query_labels_placeholder)
 
     def load_data(self):
         self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes, self.num_classes_per_ep, \
@@ -102,7 +107,7 @@ class PrototypicalNetwork(Model):
         # TODO: double check that batchnorm is being reused for a given layer
         batch_norm = tf.layers.batch_normalization(conv + biases, training=is_training, name='batch_norm')
         relu = tf.nn.relu(batch_norm, name='relu')
-        pool = tf.nn.max_pool(relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID', 'max_pool_2x2')
+        pool = tf.nn.max_pool(relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='VALID', name='max_pool_2x2')
         return pool
 
     def add_model(self, support_points, support_labels, query_points, is_training):
@@ -133,7 +138,8 @@ class PrototypicalNetwork(Model):
         # TODO: check this is the right optimizer
         with tf.name_scope('optimizer'):
             optimizer = tf.train.AdamOptimizer(self.lr)
-            train_op = optimizer.minimize(loss, tf.train.get_global_step())
+            self.global_step = tf.train.get_or_create_global_step()
+            train_op = optimizer.minimize(loss, self.global_step)
         return train_op
 
     def add_loss_op(self, distances, query_labels):
@@ -150,7 +156,7 @@ class PrototypicalNetwork(Model):
             summary_op = tf.summary.merge_all()
         return loss, summary_op
 
-    def fit(self, sess):
+    def fit(self, sess, saver):
         """Fit model on provided data.
 
         Args:
@@ -164,12 +170,32 @@ class PrototypicalNetwork(Model):
         self.summary_writer = tf.summary.FileWriter(self.log_dir, graph=tf.get_default_graph())
         for i, ((sprt_label_batch, sprt_batch), (qry_label_batch, qry_batch)) in enumerate(self.data_generator):
             feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, True)
-            _, loss, summary = sess.run([self.train_op, self.loss, self.loss_summary], feed_dict=feed_dict)
-            self.summary_writer.add_summary(summary, i)
+            _, loss, summary, step = sess.run([self.train_op, self.loss, self.loss_summary, self.global_step], feed_dict=feed_dict)
+            self.summary_writer.add_summary(summary, step)
             losses.append(loss)
+            if (i + 1) % self.num_steps_per_checkpoint == 0:
+                saver.save(sess, self.checkpoint_dir, step)
+                ave_accuracy, accuracy_summary = self.validate(sess)
+                self.summary_writer.add_summary(accuracy_summary, step)
         return losses
 
-    def predict(self, support_points, query_points, support_labels, is_training, query_labels=None):
+    def validate(self, sess):
+        self.data_generator.mode = 'test'
+        ave_accuracy = 0.0
+        for i, ((sprt_label_batch, sprt_batch), (qry_label_batch, qry_batch)) in enumerate(self.data_generator):
+            if i == 100:
+                break
+            feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, False)
+            ave_accuracy += sess.run([self.accuracy_op], feed_dict=feed_dict)
+        ave_accuracy = ave_accuracy / 100.0
+        with tf.name_scope('summaries'):
+            tf.summary.scalar('ave_accuracy', ave_accuracy)
+            tf.summary.histogram('histogram ave_accuracy', ave_accuracy)
+            accuracy_summary = tf.summary.merge_all()
+        self.data_generator.mode = 'train'
+        return ave_accuracy, accuracy_summary
+
+    def predict(self, distances, query_labels=None):
         # TODO: set is_training to false. Maybe return accuracy
         """Make predictions from the provided model.
         Args:
@@ -180,17 +206,22 @@ class PrototypicalNetwork(Model):
           average_loss: Average loss of model.
           predictions: Predictions of model on input_data
         """
-        distances = self.add_model(support_points, support_labels, query_points, is_training)
         predictions = tf.argmax(distances, axis=1)
-        if query_labels != None:
-            accuracy_op = tf.metrics.accuracy(query_labels, predictions)
+        #if query_labels != None:
+        accuracy_op = tf.metrics.accuracy(query_labels, predictions)
         return predictions, accuracy_op
 
 if __name__ == "__main__":
     config = parser.parse_args()
     net = PrototypicalNetwork(config)
     init = tf.global_variables_initializer()
-    with tf.Session() as sess:
-        sess.run(init)
-        net.fit(sess)
+    saver = tf.train.Saver()
 
+    with tf.Session() as sess:
+        '''
+        if net.checkpoint != None:
+            saver.restore(sess, net.checkpoint)
+        else:
+        '''
+        sess.run(init)
+        losses = net.fit(sess, saver)

@@ -154,6 +154,7 @@ class PrototypicalNetwork(Model):
             tf.summary.scalar('loss', loss)
             tf.summary.histogram('histogram loss', loss)
             summary_op = tf.summary.merge_all()
+        return loss, summary_op
 
     def predict(self, distances, query_labels=None):
         # TODO: set is_training to false. Maybe return accuracy
@@ -174,16 +175,15 @@ class PrototypicalNetwork(Model):
                 correct_preds = tf.equal(predictions, query_labels)
                 accuracy_op = tf.reduce_mean(tf.cast(correct_preds, tf.float32))
         return predictions, accuracy_op
-       return loss, summary_op
 
-    def run_validation(self, sess):
-        self.data_generator.mode = 'test'
+    def evaluate(self, sess, mode='test'):
+        self.data_generator.mode = mode
         ave_accuracy = 0.0
         for i, ((sprt_label_batch, sprt_batch, _), (qry_label_batch, qry_batch, _)) in enumerate(self.data_generator):
             if i == 20:
                 break
             feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, False)
-            accuracy = sess.run([self.accuracy_op], feed_dict=feed_dict)[0]
+            accuracy, preds = sess.run([self.accuracy_op, self.preds], feed_dict=feed_dict)
             ave_accuracy += accuracy
         ave_accuracy = ave_accuracy / 20.0
         self.data_generator.mode = 'train'
@@ -200,20 +200,25 @@ class PrototypicalNetwork(Model):
           losses: list of loss per epoch
         """
         losses = []
-        self.summary_writer = tf.summary.FileWriter(self.log_dir, graph=tf.get_default_graph())
+        logdir = self.log_dir is self.checkpoint == None else self.checkpoint.split('-')[0]
+        self.summary_writer = tf.summary.FileWriter(logdir, graph=tf.get_default_graph())
         for i, ((sprt_label_batch, sprt_batch, _), (qry_label_batch, qry_batch, _)) in enumerate(self.data_generator):
+            # take gradient step
             feed_dict = self.create_feed_dict(sprt_batch, sprt_label_batch, qry_batch, qry_label_batch, True)
             _, loss, summary, step = sess.run([self.train_op, self.loss, self.loss_summary, self.global_step], feed_dict=feed_dict)
             self.summary_writer.add_summary(summary, step)
             losses.append(loss)
+            # evaluate on test set and train set
+            if (i + 1) % self.num_steps_per_checkpoint == 0 or i == 0:
+                ave_test_accuracy = self.evaluate(sess, mode='test')
+                ave_train_accuracy = self.evaluate(sess, mode='train')
+                summary = tf.Summary()
+                summary.value.add(tag='test accuracy', simple_value=ave_test_accuracy)
+                summary.value.add(tag='train accuracy', simple_value=ave_train_accuracy)
+                self.summary_writer.add_summary(summary, step)
+            # save model
             if (i + 1) % self.num_steps_per_checkpoint == 0:
                 saver.save(sess, self.checkpoint_dir, step)
-            # evaluate on test set
-            if (i + 1) % self.num_steps_per_checkpoint == 0 or i == 0:
-                ave_accuracy = self.run_validation(sess)
-                summary = tf.Summary()
-                summary.value.add(tag='validation accuracy', simple_value=ave_accuracy)
-                self.summary_writer.add_summary(summary, step)
             # every 2000 episodes cut the learning rate in half
             if (i + 1) % 2000 == 0:
                 self.lr = self.lr * 0.5

@@ -200,7 +200,7 @@ class PrototypicalNetwork(Model):
           losses: list of loss per epoch
         """
         losses = []
-        logdir = self.log_dir is self.checkpoint == None else self.checkpoint.split('-')[0]
+        logdir = self.log_dir
         self.summary_writer = tf.summary.FileWriter(logdir, graph=tf.get_default_graph())
         for i, ((sprt_label_batch, sprt_batch, _), (qry_label_batch, qry_batch, _)) in enumerate(self.data_generator):
             # take gradient step
@@ -231,9 +231,15 @@ if __name__ == "__main__":
     saver = tf.train.Saver()
 
     with tf.Session() as sess:
+        checkpoint = tf.train.get_checkpoint_state(os.path.dirname(net.checkpoint_dir))
         if net.checkpoint != None:
+            print 'restoring from checkpoint:', net.checkpoint
             saver.restore(sess, net.checkpoint)
+        elif checkpoint and checkpoint.model_checkpoint_path:
+            print 'restoring from checkpoint:', checkpoint.model_checkpoint_path
+            net.checkpoint = checkpoint.model_checkpoint_path
+            saver.restore(sess, checkpoint.model_checkpoint_path)
         else:
-            print 'running from blank \n\n'
+            print 'training from scratch'
             sess.run(init)
-            losses = net.fit(sess, saver)
+        losses = net.fit(sess, saver)

@@ -17,7 +17,7 @@ parser.add_argument('--output_dir', type=str, default=os.path.join(CURRENT_DIR, 
 parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '../log'))
 parser.add_argument('--checkpoint', type=str, default=None)
 
-parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate step-size')
+parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate step-size')
 # TODO: cut learning rate in half every 2000 episodes
 parser.add_argument('--num_max_episodes', type=int, default=2000*200)
 parser.add_argument('--image_dim', type=int, default=(28, 28))
@@ -229,16 +229,20 @@ if __name__ == "__main__":
     net = PrototypicalNetwork(config)
     init = tf.global_variables_initializer()
     saver = tf.train.Saver()
+    update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
-    with tf.Session() as sess:
+    with tf.control_dependencies(update_ops):
+        sess = tf.Session()
         checkpoint = tf.train.get_checkpoint_state(os.path.dirname(net.checkpoint_dir))
         if net.checkpoint != None:
             print 'restoring from checkpoint:', net.checkpoint
             saver.restore(sess, net.checkpoint)
+            '''
         elif checkpoint and checkpoint.model_checkpoint_path:
             print 'restoring from checkpoint:', checkpoint.model_checkpoint_path
             net.checkpoint = checkpoint.model_checkpoint_path
             saver.restore(sess, checkpoint.model_checkpoint_path)
+            '''
         else:
             print 'training from scratch'
             sess.run(init)

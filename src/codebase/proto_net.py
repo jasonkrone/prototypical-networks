@@ -17,12 +17,12 @@ parser.add_argument('--output_dir', type=str, default=os.path.join(CURRENT_DIR, 
 parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '../log'))
 parser.add_argument('--checkpoint', type=str, default=None)
 
-parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate step-size')
-# TODO: cut learning rate in half every 2000 episodes
+parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate step-size')
 parser.add_argument('--num_max_episodes', type=int, default=2000*200)
 parser.add_argument('--image_dim', type=int, default=(28, 28))
 parser.add_argument('--num_steps_per_checkpoint', type=int, default=100, help='Number of steps between checkpoints')
-parser.add_argument('--num_classes_per_ep', type=int, default=60, help='Number of classes per episode')
+parser.add_argument('--num_train_classes', type=int, default=60, help='Number of classes per training episode')
+parser.add_argument('--num_test_classes', type=int, default=5, help='Number of classes per test episode')
 parser.add_argument('--num_support_points_per_class', type=int, default=5, help='Number of support points per class')
 parser.add_argument('--num_query_points_per_class', type=int, default=5, help='Number of query points per class')
 
@@ -34,7 +34,8 @@ class PrototypicalNetwork(Model):
         hyper_params = 'lr_'+str(config.lr)+'_max_ep_'+str(config.num_max_episodes)+\
                        '_num_support_'+str(config.num_support_points_per_class)+\
                        '_num_query_'+str(config.num_query_points_per_class)+\
-                       '_num_classes_'+str(config.num_classes_per_ep)
+                       '_train_classes_'+str(config.num_train_classes)+\
+                       '_test_classes_'+str(config.num_test_classes)
         subdir = date_time + '_' + hyper_params
 
         self.log_dir = config.log_dir + '/' + subdir
@@ -46,7 +47,10 @@ class PrototypicalNetwork(Model):
         self.lr = config.lr
         self.num_max_episodes = config.num_max_episodes
         self.image_dim = config.image_dim
-        self.num_classes_per_ep = config.num_classes_per_ep
+
+        self.num_train_classes = config.num_train_classes
+        self.num_test_classes  = config.num_test_classes
+
         self.num_support_points_per_class = config.num_support_points_per_class
         self.num_query_points_per_class = config.num_query_points_per_class
         self.num_steps_per_checkpoint = config.num_steps_per_checkpoint
@@ -61,18 +65,16 @@ class PrototypicalNetwork(Model):
         self.train_op = self.add_training_op(self.loss)
 
     def load_data(self):
-        self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes, self.num_classes_per_ep, \
+        self.data_generator = OmniglotGenerator(self.data_dir, self.num_max_episodes, self.num_train_classes, self.num_test_classes, \
                                                 self.num_support_points_per_class, self.num_query_points_per_class)
 
     def add_placeholders(self):
-        support_points_per_ep = self.num_classes_per_ep * self.num_support_points_per_class
-        query_points_per_ep   = self.num_classes_per_ep * self.num_query_points_per_class
         height, width = self.image_dim
         with tf.name_scope('data'):
-            self.support_points_placeholder = tf.placeholder(tf.float32, shape=(support_points_per_ep, height, width, 1), name='support_points')
-            self.support_labels_placeholder = tf.placeholder(tf.int64, shape=(support_points_per_ep), name='support_labels')
-            self.query_points_placeholder = tf.placeholder(tf.float32, shape=(query_points_per_ep, height, width, 1), name='query_points')
-            self.query_labels_placeholder = tf.placeholder(tf.int64, shape=(query_points_per_ep), name='query_labels')
+            self.support_points_placeholder = tf.placeholder(tf.float32, shape=(None, height, width, 1), name='support_points')
+            self.support_labels_placeholder = tf.placeholder(tf.int64, shape=None, name='support_labels')
+            self.query_points_placeholder = tf.placeholder(tf.float32, shape=(None, height, width, 1), name='query_points')
+            self.query_labels_placeholder = tf.placeholder(tf.int64, shape=(None), name='query_labels')
             self.is_training_placeholder = tf.placeholder(tf.bool, name='is_training')
 
     def create_feed_dict(self, support_points, support_labels, query_points, query_labels, is_training):
@@ -118,11 +120,15 @@ class PrototypicalNetwork(Model):
             scope.reuse_variables()
             query_embedding = tf.squeeze(self.add_embedding(query_points, is_training))
 
+        num_classes = self.num_train_classes
+        if is_training == False:
+            num_classes = self.num_test_classes
+
         # create prototypes for each class
         with tf.name_scope('prototype'):
             ones = tf.ones_like(support_embedding)
-            per_class_embedding_sum = tf.unsorted_segment_sum(support_embedding, support_labels, self.num_classes_per_ep, name='embedding_sum')
-            class_counts = tf.unsorted_segment_sum(ones, support_labels, self.num_classes_per_ep, name='class_counts')
+            per_class_embedding_sum = tf.unsorted_segment_sum(support_embedding, support_labels, num_classes, name='embedding_sum')
+            class_counts = tf.unsorted_segment_sum(ones, support_labels, num_classes, name='class_counts')
             class_prototypes = per_class_embedding_sum / class_counts
 
         #dist = np.sqrt(np.sum(X**2, axis=1).reshape(-1, 1) - 2*X.dot(self.X_train.T) + np.sum(self.X_train**2, axis=1))
@@ -143,13 +149,9 @@ class PrototypicalNetwork(Model):
         return train_op
 
     def add_loss_op(self, distances, query_labels):
-        # this won't work right now because of the labels values i.e. we don't produce logits
-        # for each label they're only for the num_classes_per_ep
-        # TODO: make sure the sign on the distances is correct
         with tf.name_scope('loss'):
             entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=query_labels, logits=distances*-1.0)
             loss = tf.reduce_mean(entropy, name='loss')
-        # not sure exactly what this does
         with tf.name_scope('summaries'):
             tf.summary.scalar('loss', loss)
             tf.summary.histogram('histogram loss', loss)
@@ -157,7 +159,6 @@ class PrototypicalNetwork(Model):
         return loss, summary_op
 
     def predict(self, distances, query_labels=None):
-        # TODO: set is_training to false. Maybe return accuracy
         """Make predictions from the provided model.
         Args:
           sess: tf.Session()
@@ -232,7 +233,9 @@ if __name__ == "__main__":
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
     with tf.control_dependencies(update_ops):
-        sess = tf.Session()
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        sess = tf.Session(config=config)
         checkpoint = tf.train.get_checkpoint_state(os.path.dirname(net.checkpoint_dir))
         if net.checkpoint != None:
             print 'restoring from checkpoint:', net.checkpoint

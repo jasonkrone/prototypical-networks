@@ -7,8 +7,9 @@ from scipy.misc import imread,imresize
 
 class OmniglotGenerator(object):
 
-    def __init__(self, data_dir, max_iter, num_classes_per_ep, num_support_points_per_class, num_query_points_per_class, mode='train'):
-        self.num_classes_per_ep = num_classes_per_ep
+    def __init__(self, data_dir, max_iter, num_train_classes, num_test_classes, num_support_points_per_class, num_query_points_per_class, mode='train'):
+        self.num_train_classes = num_train_classes
+        self.num_test_classes = num_test_classes
         self.num_support_points_per_class = num_support_points_per_class
         self.num_query_points_per_class = num_query_points_per_class
         self.mode = mode
@@ -50,21 +51,21 @@ class OmniglotGenerator(object):
         if (self.max_iter is None) or (self.cur_iter < self.max_iter):
             if self.mode == 'train':
                 self.cur_iter += 1
-                return self.sample_episode(self.train_classes)
+                return self.sample_episode(self.train_classes, self.num_train_classes)
             elif self.mode == 'test':
-                return self.sample_episode(self.test_classes)
+                return self.sample_episode(self.test_classes, self.num_test_classes)
         else:
             raise StopIteration
 
-    def sample_episode(self, classes):
+    def sample_episode(self, classes, num_classes):
         # randomly sample num_classes from the train or test class list
-        ep_idxs = np.random.choice(len(classes), size=self.num_classes_per_ep, replace=False)
+        ep_idxs = np.random.choice(len(classes), size=num_classes, replace=False)
         ep_classes  = classes[ep_idxs]
         # shuffle classes, this may be unecessary
-        perm = np.random.permutation(self.num_classes_per_ep)
+        perm = np.random.permutation(num_classes)
         ep_classes = ep_classes[perm]
-        num_support_points = self.num_classes_per_ep * self.num_support_points_per_class
-        num_query_points = self.num_classes_per_ep * self.num_query_points_per_class
+        num_support_points = num_classes * self.num_support_points_per_class
+        num_query_points = num_classes * self.num_query_points_per_class
         support_points = np.zeros((num_support_points, 28, 28, 1))
         support_labels = np.zeros((num_support_points))
         # keep track of mapping between str labels and int labels
@@ -111,5 +112,5 @@ class OmniglotGenerator(object):
             original = imread(path)
             resized = imresize(original, (28, 28))
             rotated = rotate(resized, angle=degree_rotation)
-            images[i, :, :, 0] = rotated
+            images[i, :, :, 0] = rotated / np.max(rotated) # trying normalization
         return images

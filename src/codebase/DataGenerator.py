@@ -65,7 +65,6 @@ class DataGenerator(object):
         h, w, c = self.image_dim
         support_points = np.zeros((num_support_points, h, w, c))
         support_labels = np.zeros((num_support_points))
-        # keep track of mapping between str labels and int labels
         query_points = np.zeros((num_query_points, h, w, c))
         query_labels = np.zeros((num_query_points))
 
@@ -73,8 +72,9 @@ class DataGenerator(object):
         for k, c in enumerate(ep_classes):
             support_points_k, query_points_k = data_for_class(c)
             support_points[k*num_sp:(k+1)*num_sp, :, :, :] = support_points_k
-            support_labels[k*num_sp:(k+1)*num_sp] = k 
             query_points[k*num_qp:(k+1)*num_qp, :, :, :] = query_points_k 
+            # assign integer labels
+            support_labels[k*num_sp:(k+1)*num_sp] = k 
             query_labels[k*num_qp:(k+1)*num_qp] = k 
 
         # shuffle support and query set so classes don't appear in order
@@ -84,7 +84,7 @@ class DataGenerator(object):
         query_perm = np.random.permutation(num_query_points)
         query_points = query_points[query_perm]
         query_labels = query_labels[query_perm]
-        return (support_labels, support_points), (query_labels, query_points)
+        return (support_points, support_labels), (query_points, query_labels)
 
     def image_data_for_files(self, file_paths, degree_rotation=0.0, new_size=(28, 28)):
         num_files = len(file_paths)

@@ -8,11 +8,12 @@ from datetime import datetime
 
 from model import Model
 from OmniglotGenerator import OmniglotGenerator
+from MiniImagenetGenerator import MiniImagenetGenerator
 
 CURRENT_DIR = os.path.dirname(__file__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--data_dir', type=str, default=os.path.join('/home/jason/datasets/omniglot_images'))
+parser.add_argument('--data_dir', type=str, default=os.path.join('/dvmm-filer2/datasets/ImageNet/train/'))
 parser.add_argument('--checkpoint_dir', type=str, default=os.path.join(CURRENT_DIR, '../checkpoints'))
 parser.add_argument('--output_dir', type=str, default=os.path.join(CURRENT_DIR, '../out'))
 parser.add_argument('--log_dir', type=str, default=os.path.join(CURRENT_DIR, '../log'))
@@ -58,7 +59,7 @@ class PrototypicalNetwork(Model):
         self.num_query_points_per_class = config.num_query_points_per_class
         self.num_steps_per_checkpoint = config.num_steps_per_checkpoint
         self.config = copy.deepcopy(config)
-        
+
         # set up model
         self.load_data()
         self.add_placeholders()
@@ -74,7 +75,7 @@ class PrototypicalNetwork(Model):
         #                                        self.num_support_points_per_class, self.num_query_points_per_class)
         self.data_generator = MiniImagenetGenerator(self.data_dir, self.num_max_episodes, self.num_support_points_per_class,\
                                                     self.num_query_points_per_class, self.num_train_classes, self.num_test_classes, \
-                                                    self.num_val_classes=None, mode='train')
+                                                    num_val_classes=None, mode='train')
 
     def add_placeholders(self):
         height, width, channels = self.image_dim
@@ -121,9 +122,9 @@ class PrototypicalNetwork(Model):
         # compute embeddings of all examples
         # TODO: double check that weights are shared
         with tf.variable_scope('embedding') as scope:
-            support_embedding = tf.squeeze(self.add_embedding(support_points, is_training))
+            support_embedding = tf.contrib.layers.flatten(self.add_embedding(support_points, is_training))
             scope.reuse_variables()
-            query_embedding = tf.squeeze(self.add_embedding(query_points, is_training))
+            query_embedding = tf.contrib.layers.flatten(self.add_embedding(query_points, is_training))
 
         # create prototypes for each class
         with tf.name_scope('prototype'):

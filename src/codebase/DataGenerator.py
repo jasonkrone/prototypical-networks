@@ -37,14 +37,14 @@ class DataGenerator(object):
         else:
             raise StopIteration
 
-    def split_classes(self, class_dirs, split_sizes):
+    def split_classes(self, classes, split_sizes):
         splits = [] 
         total  = sum(split_sizes)
-        # generates total random classes from class_dirs
-        idxs   = np.random.choice(len(class_dirs), size=total, replace=False)
+        # generates total random classes
+        idxs   = np.random.choice(len(classes), size=total, replace=False)
         s_prev = 0
         for s in split_sizes:
-            new_split = idxs[s_prev:s_prev+s]
+            new_split = classes[idxs[s_prev:s_prev+s]]
             splits.append(new_split)
             s_prev += s
         # check there are no duplicates
@@ -70,7 +70,7 @@ class DataGenerator(object):
 
         num_sp, num_qp = self.num_support_points_per_class, self.num_query_points_per_class
         for k, c in enumerate(ep_classes):
-            support_points_k, query_points_k = data_for_class(c)
+            support_points_k, query_points_k = self.data_for_class(c)
             support_points[k*num_sp:(k+1)*num_sp, :, :, :] = support_points_k
             query_points[k*num_qp:(k+1)*num_qp, :, :, :] = query_points_k 
             # assign integer labels
@@ -86,11 +86,18 @@ class DataGenerator(object):
         query_labels = query_labels[query_perm]
         return (support_points, support_labels), (query_points, query_labels)
 
-    def image_data_for_files(self, file_paths, degree_rotation=0.0, new_size=(28, 28)):
+    def image_data_for_files(self, file_paths, degree_rotation=0.0, new_size=None):
+        if new_size == None:
+            new_size = self.image_dim
         num_files = len(file_paths)
-        images = np.zeros((num_files, 28, 28, 1))
+        h, w, c = new_size 
+        images = np.zeros((num_files, h, w, c))
         for i, path in enumerate(file_paths):
             original = imread(path)
+            # TODO: this is a hack
+            if len(original.shape) == 2 and c == 3:
+                print('bad shape: ', original.shape, ' for path:', path)
+                original = np.repeat(original[:, :, np.newaxis], 3, axis=2)
             resized  = imresize(original, new_size)
             rotated  = rotate(resized, angle=degree_rotation)
             # TODO: : might break this

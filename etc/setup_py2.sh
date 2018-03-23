@@ -29,13 +29,13 @@ mkdir -p ./etc/conda/deactivate.d
 touch ./etc/conda/activate.d/env_vars.sh
 touch ./etc/conda/deactivate.d/env_vars.sh
 # edit activate
-echo "#!/bin/sh" > ./etc/conda/activate.d/env_vars.sh
-echo "export LD_LIBRARY_PATH='$LD_LIBRARY_PATH:/usr/local/cuda-8.0/lib64:/usr/local/cuda-8.0/extras/CUPTI/lib64'" > ./etc/conda/activate.d/env_vars.sh
-echo "export CUDA_HOME=/usr/local/cuda-8.0" > ./etc/conda/activate.d/env_vars.sh
+echo "#!/bin/sh" >> ./etc/conda/activate.d/env_vars.sh
+echo "export LD_LIBRARY_PATH='$LD_LIBRARY_PATH:/usr/local/cuda-8.0/lib64:/usr/local/cuda-8.0/extras/CUPTI/lib64'" >> ./etc/conda/activate.d/env_vars.sh
+echo "export CUDA_HOME=/usr/local/cuda-8.0" >> ./etc/conda/activate.d/env_vars.sh
 # edit deactivate
-echo "#!/bin/sh" > ./etc/conda/deactivate.d/env_vars.sh
-echo "unset LD_LIBRARY_PATH" > ./etc/conda/deactivate.d/env_vars.sh
-echo "unset CUDA_HOME" > ./etc/conda/deactivate.d/env_vars.sh
+echo "#!/bin/sh" >> ./etc/conda/deactivate.d/env_vars.sh
+echo "unset LD_LIBRARY_PATH" >> ./etc/conda/deactivate.d/env_vars.sh
+echo "unset CUDA_HOME" >> ./etc/conda/deactivate.d/env_vars.sh
 
 # ^ taken from https://stackoverflow.com/questions/41991101/importerror-libcudnn-when-running-a-tensorflow-program
 # and https://conda.io/docs/user-guide/tasks/manage-environments.html#saving-environment-variables

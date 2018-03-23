@@ -5,6 +5,17 @@ sudo apt-key-adv --fetch-keys http://developer.download.nvidia.com/compute/cuda/
 sudo apt-get update
 sudo apt-get install cuda-libraries-9-0
 
+# install nvidia-driver for TI 1080 on ubuntu
+sudo apt purge nvidia-*
+sudo add-apt-repository ppa:graphics-drivers/ppa
+sudo apt update
+sudo apt install nvidia-390
+
+# install cuDNN
+# goto nvidia-website and download installer
+# https://developer.nvidia.com/cudnn
+# follow http://docs.nvidia.com/deeplearning/sdk/cudnn-install/index.html#installlinux-deb
+
 # download anaconda for python3
 curl -O https://repo.continuum.io/archive/Anaconda3-5.1.0-Linux-x86_64.sh
 # run installer 
@@ -46,7 +57,4 @@ echo "unset CUDA_HOME" >> ./etc/conda/deactivate.d/env_vars.sh
 # ^ taken from https://stackoverflow.com/questions/41991101/importerror-libcudnn-when-running-a-tensorflow-program
 # and https://conda.io/docs/user-guide/tasks/manage-environments.html#saving-environment-variables
 
-# TODO: install cuDNN
-# goto nvidia-website and download installer
-# move files to location listed on webpage
 
